@@ -1,0 +1,22 @@
+# Attaches the Cloud Armor policy Terraform created (modules/observability,
+# google_compute_security_policy.waf, name "waf-policy") to this Service's
+# GKE-managed backend service — see docs/DESIGN.md §7.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: orders-service-backendconfig
+  namespace: apps
+spec:
+  securityPolicy:
+    name: "waf-policy"
+  # Without this, GCLB's auto-generated health check defaults to GET / on the
+  # serving port — Spring Boot has no mapping there, returns 404, and every NEG
+  # endpoint shows UNHEALTHY forever even though the app itself is fine.
+  healthCheck:
+    type: HTTP
+    requestPath: /actuator/health/readiness
+    port: 8080
+    checkIntervalSec: 15
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3

@@ -1,0 +1,40 @@
+# Single global routing rule for both apps — see docs/DESIGN.md §3/§4. Applied only
+# to the config cluster (gke-primary); Google provisions the global anycast IP,
+# managed SSL cert, and per-cluster NEGs/backend services from this one object.
+apiVersion: networking.gke.io/v1
+kind: MultiClusterIngress
+metadata:
+  name: catalog-ingress
+  namespace: apps
+  annotations:
+    kubernetes.io/ingress.class: gce-multi-cluster
+spec:
+  template:
+    spec:
+      backend:
+        serviceName: catalog-service
+        servicePort: 80
+      rules:
+        - http:
+            paths:
+              # GCE URL map path matching: a "/*" suffix matches anything UNDER that
+              # prefix but NOT the bare prefix itself (e.g. "/api/orders/*" matches
+              # "/api/orders/5" but not "/api/orders") — both forms are listed
+              # explicitly so the bare collection endpoints aren't only reachable by
+              # accident via the default backend below.
+              - path: /api/orders
+                backend:
+                  serviceName: orders-service
+                  servicePort: 80
+              - path: /api/orders/*
+                backend:
+                  serviceName: orders-service
+                  servicePort: 80
+              - path: /api/catalog
+                backend:
+                  serviceName: catalog-service
+                  servicePort: 80
+              - path: /api/catalog/*
+                backend:
+                  serviceName: catalog-service
+                  servicePort: 80

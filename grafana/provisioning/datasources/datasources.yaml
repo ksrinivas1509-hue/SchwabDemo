@@ -1,0 +1,35 @@
+# Reference copy of the datasource provisioning config — the actual deployment path
+# (docs/IMPLEMENTATION.md Step 12) embeds this same content inline in
+# grafana/helm-values.yaml's `datasources` key, since the Helm chart templates that
+# key into exactly this file inside the pod. Kept here standalone too because
+# docs/DESIGN.md §5 points at this path, and it's the easier place to read/diff the
+# datasource config without parsing the wrapping Helm values structure.
+#
+# Both datasources authenticate via Workload Identity (authenticationType: gce) using
+# the grafana-sa GSA Terraform created and bound to the `grafana` KSA in `monitoring`
+# — no API keys or service account JSON committed anywhere.
+#
+# `uid` is pinned explicitly (rather than left for Grafana to auto-generate) because
+# grafana/dashboards/gke-observability.json references these datasources by uid —
+# without a pinned value, the dashboard's panels would fail to resolve their
+# datasource on import. Grafana UIDs can't contain spaces, hence `cloud-monitoring`
+# rather than the display name.
+apiVersion: 1
+datasources:
+  - name: BigQuery
+    uid: BigQuery
+    type: grafana-bigquery-datasource
+    access: proxy
+    isDefault: false
+    jsonData:
+      authenticationType: gce
+      defaultProject: "${PROJECT_ID}" # rendered via envsubst at install time, see IMPLEMENTATION.md Step 12
+
+  - name: Google Cloud Monitoring
+    uid: cloud-monitoring
+    type: stackdriver
+    access: proxy
+    isDefault: true
+    jsonData:
+      authenticationType: gce
+      defaultProject: "${PROJECT_ID}"

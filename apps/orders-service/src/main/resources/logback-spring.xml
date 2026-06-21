@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!--
+        Structured JSON logging to stdout for Cloud Logging ingestion.
+        The "severity" field mirrors the log level using Cloud Logging's
+        expected values (INFO/WARNING/ERROR/etc.) so BigQuery/Log Router
+        based queries can filter on it directly.
+    -->
+    <appender name="STDOUT_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <fieldNames>
+                <message>message</message>
+            </fieldNames>
+            <customFields>{"service":"orders-service"}</customFields>
+            <provider class="net.logstash.logback.composite.loggingevent.LogLevelJsonProvider">
+                <fieldName>severity</fieldName>
+            </provider>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT_JSON"/>
+    </root>
+</configuration>

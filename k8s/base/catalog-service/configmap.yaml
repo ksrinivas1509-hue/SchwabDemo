@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-service-config
+  namespace: apps
+data:
+  APP_NAME: "catalog-service"
+  SERVER_PORT: "8080"

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-service-config
+  namespace: apps
+data:
+  APP_NAME: "orders-service"
+  SERVER_PORT: "8080"
+  DB_HOST: "127.0.0.1" # cloud-sql-proxy sidecar, same pod
+  DB_PORT: "5432"
+  DB_NAME: "orders"
+  # Set by docs/IMPLEMENTATION.md Step 6 (project ID isn't known to this static
+  # manifest): "<PROJECT_ID>:us-central1:orders-db", consumed by the cloud-sql-proxy
+  # sidecar in deployment.yaml via $(INSTANCE_CONNECTION_NAME).
+  INSTANCE_CONNECTION_NAME: "REPLACE_ME"

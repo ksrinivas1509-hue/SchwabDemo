@@ -1,0 +1,29 @@
+# Applied only to the config cluster (gke-primary) — see docs/IMPLEMENTATION.md Step 7.
+# Fans out to the `orders-service` Service on every Fleet member cluster.
+# `link` location must match each cluster's actual location: region (var.gke_cluster_locations
+# = "regional", the default) or zone (if you've switched it to "zonal" — see docs/DESIGN.md §2).
+apiVersion: networking.gke.io/v1
+kind: MultiClusterService
+metadata:
+  name: orders-service
+  namespace: apps
+  # MCI's per-cluster "derived" Service (the one actually wired to the NEG/backend
+  # service) is what the BackendConfig controller reads from — annotating the plain
+  # Service in k8s/base/orders-service/service.yaml has no effect on the GCLB
+  # health check. This annotation is what propagates the BackendConfig down to the
+  # derived Service.
+  annotations:
+    cloud.google.com/backend-config: '{"default": "orders-service-backendconfig"}'
+spec:
+  template:
+    spec:
+      selector:
+        app: orders-service
+      ports:
+        - name: http
+          protocol: TCP
+          port: 80
+          targetPort: 8080
+  clusters:
+    - link: "us-central1/gke-primary"
+    - link: "us-east1/gke-secondary"

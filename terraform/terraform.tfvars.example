@@ -1,0 +1,41 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored — never commit
+# real project IDs, billing account IDs, or group emails if this repo becomes public.
+
+project_id = "schwab-gke-demo-2026"
+
+# create_project defaults to true: Terraform creates project_id itself and links
+# billing_account. Find your billing account with `gcloud billing accounts list`.
+# billing_account = "XXXXXX-XXXXXX-XXXXXX"
+
+# Leave org_id/folder_id null if you don't have a GCP Organization — Terraform then
+# creates a standalone org-less project. Check first with `gcloud organizations list`:
+# some personal Gmail accounts now have a lightweight Cloud Identity org
+# auto-provisioned even though you never set one up — if that command returns a row,
+# set org_id to it (Org -> Project, no Folder, is enough to satisfy the spec's
+# resource-hierarchy ask without extra setup):
+# org_id    = "123456789012"
+# folder_id = "345678901234"
+
+# If the project already exists and you just want Terraform to configure it instead
+# of creating it, set:
+# create_project = false
+
+# Leave these null/unset if you don't have a Google Workspace org with these groups —
+# the corresponding IAM bindings are simply skipped (see modules/project).
+# dev_group = "gke-demo-dev@example.com"
+# ops_group = "gke-demo-ops@example.com"
+# sre_group = "gke-demo-sre@example.com"
+
+# Defaults below match docs/DESIGN.md and rarely need overriding for this exercise.
+# region_primary         = "us-central1"
+# zone_primary           = "us-central1-a"
+# region_secondary       = "us-east1"
+# zone_secondary         = "us-east1-b"
+# gke_cluster_locations  = "regional" # 3-zone control plane; node pools still pinned to
+#                                      # zone_primary/zone_secondary, so node cost is flat.
+#                                      # Set to "zonal" to also put the control plane in
+#                                      # a single zone (cheapest, no control-plane HA).
+# enable_mci_feature     = false      # see docs/IMPLEMENTATION.md Step 7
+
+# orders_db_password has NO default and is sensitive — do not set it here.
+# Export it instead: export TF_VAR_orders_db_password="$(openssl rand -base64 24)"

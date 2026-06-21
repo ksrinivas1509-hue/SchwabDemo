@@ -1,0 +1,80 @@
+# Used by `helm upgrade --install grafana grafana/grafana -f grafana/helm-values.yaml`
+# — see docs/IMPLEMENTATION.md Step 12. The dashboard JSON itself is injected
+# separately via --set-file (kept as a real .json file for readability/diffing
+# rather than inlined here).
+#
+# ${PROJECT_ID} / ${GRAFANA_SA} below are rendered via `envsubst` at install time
+# (see Step 12), since neither is known to this static file. Nested keys containing
+# a literal "." (datasources.yaml, dashboardproviders.yaml) make `helm --set`
+# escaping painful, so envsubst-then-`-f` is simpler and more robust than `--set`.
+
+serviceAccount:
+  create: true
+  name: grafana
+  annotations:
+    iam.gke.io/gcp-service-account: "${GRAFANA_SA}"
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+service:
+  type: ClusterIP
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# doitintl-bigquery-datasource (the community plugin originally used here) is
+# officially deprecated and still Angular-based even in its newest release — modern
+# Grafana has fully removed Angular support, so it can never load ("angular plugins
+# are not supported"), no config workaround fixes that. grafana-bigquery-datasource
+# is Grafana Labs' own signed, actively maintained replacement.
+plugins:
+  - grafana-bigquery-datasource
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      # uid is pinned to match what grafana/dashboards/gke-observability.json
+      # hard-codes in each panel's `datasource.uid` — see
+      # grafana/provisioning/datasources/datasources.yaml for the full explanation.
+      - name: BigQuery
+        uid: BigQuery
+        type: grafana-bigquery-datasource
+        access: proxy
+        isDefault: false
+        jsonData:
+          authenticationType: gce
+          defaultProject: "${PROJECT_ID}"
+      - name: Google Cloud Monitoring
+        uid: cloud-monitoring
+        type: stackdriver
+        access: proxy
+        isDefault: true
+        jsonData:
+          authenticationType: gce
+          defaultProject: "${PROJECT_ID}"
+
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: "default"
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    gke-observability:
+      json: "" # populated via --set-file at install time, see docs/IMPLEMENTATION.md Step 12

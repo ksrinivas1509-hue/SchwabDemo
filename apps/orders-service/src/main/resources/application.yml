@@ -1,0 +1,52 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: orders-service
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:127.0.0.1}:${DB_PORT:5432}/${DB_NAME:orders}
+    username: ${DB_USER:orders_app}
+    password: ${DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # db-f1-micro caps out around 25 total Postgres connections. HikariCP's
+      # default max pool size is 10 per instance; with 2 replicas x 2 clusters that's
+      # up to 40 requested connections against a 25-connection ceiling, which is
+      # exactly what caused "remaining connection slots are reserved for
+      # non-replication superuser connections" crash-looping in production. Capped
+      # low enough that 4 pods x 4 connections = 16 stays well under the limit, with
+      # headroom for psql/Grafana sessions.
+      maximum-pool-size: 4
+
+  jpa:
+    # Using ddl-auto=update instead of a schema.sql/spring.sql.init.mode setup:
+    # simplest option for this demo (single Order entity, no migration history
+    # to manage) - Hibernate creates/updates the table automatically on boot.
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        # Spring Boot's readiness group only includes ReadinessStateHealthIndicator
+        # by default - "db" must be added explicitly to make /actuator/health/readiness
+        # reflect real Postgres connectivity through the cloud-sql-proxy sidecar.
+        # Deliberately NOT added to the liveness group: a slow/unreachable DB should
+        # stop traffic routing (readiness), not trigger pointless pod restarts (liveness).
+        readiness:
+          include: readinessState,db
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

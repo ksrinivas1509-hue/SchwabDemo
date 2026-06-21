@@ -1,0 +1,23 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/tfplan*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+crash.log
+
+# Java / Maven
+apps/*/target/
+
+# Secrets / local config
+*.pem
+*.key
+.env
+
+# OS
+.DS_Store
+
+# IDE / local tooling config — machine-specific, not part of the project
+.idea/
+.claude/

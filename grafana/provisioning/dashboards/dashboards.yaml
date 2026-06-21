@@ -1,0 +1,14 @@
+# Reference copy — the actual deployment path (docs/IMPLEMENTATION.md Step 12) embeds
+# this same provider config inline in grafana/helm-values.yaml's `dashboardProviders`
+# key. See grafana/provisioning/datasources/datasources.yaml for why both exist.
+apiVersion: 1
+providers:
+  - name: "default"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/default

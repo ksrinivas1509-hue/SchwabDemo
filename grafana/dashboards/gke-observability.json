@@ -1,0 +1,127 @@
+{
+  "title": "GKE Observability — catalog-service / orders-service",
+  "uid": "gke-observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Application error rate over time",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-bigquery-datasource", "uid": "BigQuery" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawQuery": true,
+          "rawSql": "SELECT TIMESTAMP_TRUNC(timestamp, MINUTE) AS time, resource.labels.container_name AS app, SAFE_DIVIDE(COUNTIF(jsonPayload.level IN ('ERROR', 'WARN')), COUNT(*)) AS error_rate FROM `logs_export.stdout` WHERE resource.type = 'k8s_container' AND resource.labels.namespace_name = 'apps' AND $__timeFilter(timestamp) GROUP BY time, app ORDER BY time"
+        }
+      ],
+      "description": "Source: bigquery/sample_queries.sql #1 — the one panel that's genuinely log-shaped, see docs/DESIGN.md §5."
+    },
+    {
+      "id": 2,
+      "title": "Pod restart counts by namespace",
+      "type": "timeseries",
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "kubernetes.io/container/restart_count"],
+            "groupBys": ["resource.label.\"namespace_name\""],
+            "crossSeriesReducer": "REDUCE_SUM",
+            "perSeriesAligner": "ALIGN_DELTA"
+          }
+        }
+      ],
+      "description": "Cloud Monitoring metric, not BigQuery — see docs/DESIGN.md §5 for why. BigQuery-derived fallback: bigquery/sample_queries.sql #2. timeSeriesList.projectName is required — without it the query editor silently never issues a request at all (no error, just permanently \"No data\"); see docs/TROUBLESHOOTING.md."
+    },
+    {
+      "id": 3,
+      "title": "Request latency percentiles (p50/p95/p99)",
+      "type": "timeseries",
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "p50",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "loadbalancing.googleapis.com/https/total_latencies"],
+            "crossSeriesReducer": "REDUCE_PERCENTILE_50",
+            "perSeriesAligner": "ALIGN_DELTA"
+          }
+        },
+        {
+          "refId": "p95",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "loadbalancing.googleapis.com/https/total_latencies"],
+            "crossSeriesReducer": "REDUCE_PERCENTILE_95",
+            "perSeriesAligner": "ALIGN_DELTA"
+          }
+        },
+        {
+          "refId": "p99",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "loadbalancing.googleapis.com/https/total_latencies"],
+            "crossSeriesReducer": "REDUCE_PERCENTILE_99",
+            "perSeriesAligner": "ALIGN_DELTA"
+          }
+        }
+      ],
+      "description": "Cloud Monitoring metric, not BigQuery. BigQuery-derived fallback (needs an LB log sink): bigquery/sample_queries.sql #3. timeSeriesList.projectName is required on every target — without it the query editor never issues a request, see docs/TROUBLESHOOTING.md."
+    },
+    {
+      "id": 4,
+      "title": "Resource utilization trends (CPU/Memory)",
+      "type": "timeseries",
+      "datasource": { "type": "stackdriver", "uid": "cloud-monitoring" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "cpu",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "kubernetes.io/container/cpu/core_usage_time"],
+            "groupBys": ["resource.label.\"namespace_name\"", "resource.label.\"container_name\""],
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "perSeriesAligner": "ALIGN_RATE"
+          }
+        },
+        {
+          "refId": "memory",
+          "queryType": "timeSeriesList",
+          "timeSeriesList": {
+            "projectName": "${PROJECT_ID}",
+            "filters": ["metric.type", "=", "kubernetes.io/container/memory/used_bytes"],
+            "groupBys": ["resource.label.\"namespace_name\"", "resource.label.\"container_name\""],
+            "crossSeriesReducer": "REDUCE_MEAN",
+            "perSeriesAligner": "ALIGN_MEAN"
+          }
+        }
+      ],
+      "description": "Cloud Monitoring metrics, not BigQuery — CPU/memory are measured, never logged, so there is no log-line equivalent. See docs/DESIGN.md §5. timeSeriesList.projectName is required on every target — without it the query editor never issues a request, see docs/TROUBLESHOOTING.md."
+    }
+  ]
+}
