@@ -10,6 +10,33 @@ Target: everything below should be runnable Thu/Fri, demo-ready by **Monday EOD*
 walked through live **Tuesday/Wednesday**. Each step says how long it realistically
 takes so you can plan the timebox.
 
+## Step order at a glance
+
+```mermaid
+graph TD
+    S0["Step 0<br/>Prerequisites"] --> S1["Step 1<br/>Bootstrap project"]
+    S1 --> S2["Step 2<br/>terraform apply<br/>⏱ 25-40 min"]
+    S2 --> S3["Step 3<br/>Get cluster credentials"]
+    S3 --> S4["Step 4<br/>Build & push images"]
+    S4 --> S5["Step 5<br/>Namespaces +<br/>Workload Identity check"]
+    S5 --> S6["Step 6<br/>Sync secret + deploy apps"]
+    S6 --> S7["Step 7<br/>Register Fleet + MCI<br/>⏱ 10-20 min"]
+    S7 --> S8["Step 8<br/>Point DNS at LB<br/>(optional)"]
+    S7 --> S10["Step 10<br/>Verify endpoint<br/>📦 Deliverable #1"]
+    S10 --> S11["Step 11<br/>Generate demo traffic"]
+    S11 --> S12["Step 12<br/>Deploy Grafana<br/>📦 Deliverable #2"]
+    S11 --> S13["Step 13<br/>Run BigQuery queries<br/>📦 Deliverable #3"]
+    S6 -.->|"as issues come up"| S14["Step 14<br/>Document troubleshooting<br/>📦 Deliverable #4"]
+    S12 --> S15["Step 15<br/>Tear down<br/>(after the demo only)"]
+    S13 --> S15
+    S9["Step 9<br/>Cloud Trace/Profiler<br/>(stretch goal, skip if<br/>10-14 aren't solid yet)"]
+```
+
+Steps 8 and 9 are optional side-branches, not blockers — the critical path for all 4
+deliverables is 0→1→2→3→4→5→6→7→10→11→(12 and 13 in parallel). Step 14 isn't a single
+point in the sequence — you fill it in whenever something actually breaks, which it
+will.
+
 ---
 
 ## Step 0. Prerequisites (15 min)
@@ -287,9 +314,12 @@ echo $LB_IP
 gcloud dns record-sets create www.yourapp.example. --zone=<your-managed-zone> \
   --type=A --ttl=300 --rrdatas="${LB_IP}"
 ```
-No domain handy? Demo against `https://$LB_IP` directly (self-signed/Google-managed
-cert will warn in a browser without a real hostname — fine for an internal demo, call
-it out live rather than scrambling for a domain).
+No domain handy? Demo against `http://$LB_IP` directly — **note `http://`, not
+`https://`**: there's no managed cert without a real domain (see `docs/DESIGN.md` §9),
+so this exercise runs the LB on port 80 only. If you type the bare IP into a browser
+address bar instead of pasting the full `http://...` URL, most browsers will silently
+try `https://` first and show a connection error — that's the browser's default
+behavior biting you, not the LB actually being down.
 
 ---
 
@@ -329,11 +359,13 @@ solid yet.
 ## Step 10. Verify the working endpoint (5 min) — Deliverable #1
 
 ```bash
-curl -sk "https://${LB_IP}/api/catalog" | jq .
-curl -sk "https://${LB_IP}/api/orders" | jq .
+curl -s "http://${LB_IP}/api/catalog" | jq .
+curl -s "http://${LB_IP}/api/orders" | jq .
 ```
 This satisfies "Working cluster with accessible application endpoint." Screenshot the
-terminal output or the browser response for the demo.
+terminal output or the browser response for the demo. Use `http://`, not `https://` —
+see the note in Step 8 on why, and don't test by pasting a bare IP into a browser
+address bar (it'll likely auto-upgrade to `https://` and fail).
 
 ---
 
@@ -341,9 +373,9 @@ terminal output or the browser response for the demo.
 
 ```bash
 for i in $(seq 1 200); do
-  curl -sk "https://${LB_IP}/api/catalog" > /dev/null
-  curl -sk "https://${LB_IP}/api/catalog/stress?ms=300" > /dev/null
-  curl -sk -X POST "https://${LB_IP}/api/orders" \
+  curl -s "http://${LB_IP}/api/catalog" > /dev/null
+  curl -s "http://${LB_IP}/api/catalog/stress?ms=300" > /dev/null
+  curl -s -X POST "http://${LB_IP}/api/orders" \
     -H 'Content-Type: application/json' \
     -d '{"product":"widget","quantity":1}' > /dev/null
 done
@@ -443,7 +475,7 @@ it to `false` only when you're actually done with the exercise.
 ## Demo Checklist (for Tuesday/Wednesday)
 
 - [ ] `kubectl get nodes` on both clusters, live, to show "working cluster"
-- [ ] `curl https://$LB_IP/api/catalog` and `/api/orders` — accessible endpoint
+- [ ] `curl http://$LB_IP/api/catalog` and `/api/orders` — accessible endpoint (note `http://`, no managed cert built — see `docs/DESIGN.md` §9)
 - [ ] Grafana dashboard open in a browser tab, all 4 panels populated
 - [ ] BigQuery console tab with `sample_queries.sql` ready to run live
 - [ ] `docs/TROUBLESHOOTING.md` filled in with your real incident

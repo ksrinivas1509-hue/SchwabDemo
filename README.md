@@ -37,12 +37,12 @@ README in isolation, they assume that doc's ordering and exported env vars
 
 ## Deliverables checklist (per `instructions`)
 
-- [x] Working cluster with accessible application endpoint — live at `http://35.201.107.129` (`/api/catalog`, `/api/orders` both return 200)
+- [x] Working cluster with accessible application endpoint — live at `http://35.201.107.129` (`/api/catalog`, `/api/orders` both return 200). **Note the `http://`** — this exercise's LB is HTTP-only (no domain available to issue a managed TLS cert against, see `docs/DESIGN.md` §9); pasting the bare IP into a browser will likely auto-upgrade to `https://` and fail. Always use the explicit `http://` scheme.
 - [x] Screenshot/export of the Grafana dashboard — deployed, all 4 panels confirmed showing real data as of 2026-06-21
 - [x] Sample BigQuery queries demonstrating log analysis — `bigquery/sample_queries.sql`, all verified live against `logs_export` on 2026-06-21 (queries 1, 2, 4, 5 returned real data; query 3 intentionally has no data — needs an LB log sink not built in this exercise, see its own comment)
 - [x] Troubleshooting scenario (one real issue + resolution) — `docs/TROUBLESHOOTING.md` "Your Documented Issue": Cloud SQL connection pool exhaustion (12 total real issues documented, this one selected as the submission)
 - [x] Infrastructure as Code (Terraform) to reproduce the setup — `terraform/`, applied successfully to `srini-schwab-demo-062020026`
-- [x] Architecture diagram — `docs/DESIGN.md` §4
+- [x] Architecture diagram — `docs/DESIGN.md` "Architecture at a Glance" (full system) plus §2 (cluster/node pools), §3 (Workload Identity), §4 (request flow), §5 (observability data flow) for the detailed views
 - [x] BigQuery schema and sample queries used in Grafana — `bigquery/sample_queries.sql`, `grafana/dashboards/gke-observability.json`, both verified live
 - [x] Design decisions and rationale — `docs/DESIGN.md`, especially §9
 
@@ -52,7 +52,8 @@ This builds the architecture as written in `instructions`, with a small number o
 deliberate, documented deviations where building the literal thing would cost more
 time/risk than it returns before Monday EOD (Binary Authorization/Cloud Armor in
 dry-run/audit rather than fully enforced, Cloud Trace/Profiler scoped as a fast-follow
-rather than baked into the base apps). Every deviation is called out explicitly, with
+rather than baked into the base apps, the load balancer running HTTP-only since no
+domain was available for a managed TLS cert). Every deviation is called out explicitly, with
 its reasoning, in `docs/DESIGN.md` — nothing is silently skipped. Project creation
 itself is handled by Terraform (`terraform/modules/project`, `create_project = true` by
 default), not `gcloud`. GKE clusters use a regional (3-zone) control plane by default

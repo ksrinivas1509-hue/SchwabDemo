@@ -346,11 +346,16 @@ the exact snippet if you have spare time.
 ## 12. Step 10 — Verify the working endpoint (Deliverable #1)
 
 ```bash
-curl -sk "https://${LB_IP}/api/catalog" | jq .
-curl -sk "https://${LB_IP}/api/orders" | jq .
+curl -s "http://${LB_IP}/api/catalog" | jq .
+curl -s "http://${LB_IP}/api/orders" | jq .
 ```
 **✅ Check:** both return JSON. Screenshot this — it's literally Deliverable #1
-("Working cluster with accessible application endpoint").
+("Working cluster with accessible application endpoint"). **Use `http://`, not
+`https://`** — there's no managed TLS cert (no domain to issue one against, see
+`docs/DESIGN.md` §9), so the LB only listens on port 80. If you test by typing the
+bare IP into a browser address bar instead of pasting the full `http://...` URL, most
+browsers auto-upgrade to `https://` by default and will show a connection error —
+that's the browser's behavior, not the endpoint actually being down.
 
 ---
 
@@ -361,9 +366,9 @@ will look empty/boring.
 
 ```bash
 for i in $(seq 1 200); do
-  curl -sk "https://${LB_IP}/api/catalog" > /dev/null
-  curl -sk "https://${LB_IP}/api/catalog/stress?ms=300" > /dev/null
-  curl -sk -X POST "https://${LB_IP}/api/orders" \
+  curl -s "http://${LB_IP}/api/catalog" > /dev/null
+  curl -s "http://${LB_IP}/api/catalog/stress?ms=300" > /dev/null
+  curl -s -X POST "http://${LB_IP}/api/orders" \
     -H 'Content-Type: application/json' \
     -d '{"product":"widget","quantity":1}' > /dev/null
 done

@@ -28,6 +28,51 @@ Everything below (Terraform, Kubernetes manifests, BigQuery, Grafana) uses these
 | Log sinks | `sink-app-logs` (container stdout/stderr), `sink-k8s-events` (pod lifecycle/restart events) |
 | Grafana | self-hosted via Helm in `gke-primary`, namespace `monitoring` |
 
+## Architecture at a Glance
+
+```mermaid
+graph TB
+    Internet(("Internet"))
+    LB["Global External Load Balancer<br/>Multi-Cluster Ingress, anycast IP<br/>HTTP only — see §9"]
+
+    subgraph GCP["GCP Project (Org-scoped, single project)"]
+        subgraph VPC["VPC: vpc-gke-demo"]
+            subgraph Primary["gke-primary — us-central1<br/>(regional control plane)"]
+                CP1["catalog-service<br/>(2-6 pods)"]
+                OP1["orders-service<br/>(2-6 pods)"]
+            end
+            subgraph Secondary["gke-secondary — us-east1<br/>(regional control plane)"]
+                CP2["catalog-service<br/>(2-6 pods)"]
+                OP2["orders-service<br/>(2-6 pods)"]
+            end
+        end
+        SQL[("Cloud SQL<br/>orders-db (Postgres)")]
+        AR["Artifact Registry"]
+        BQ[("BigQuery<br/>logs_export")]
+        Grafana["Grafana<br/>(self-hosted, on gke-primary)"]
+        CM["Cloud Monitoring"]
+        CL["Cloud Logging"]
+    end
+
+    Internet --> LB
+    LB -->|nearest healthy cluster| Primary
+    LB -->|nearest healthy cluster| Secondary
+    OP1 -->|Cloud SQL Auth Proxy<br/>private IP| SQL
+    OP2 -->|Cloud SQL Auth Proxy<br/>private IP| SQL
+    CP1 & OP1 & CP2 & OP2 -.->|structured stdout| CL
+    CP1 & OP1 & CP2 & OP2 -.->|metrics| CM
+    CL -->|log sinks| BQ
+    Grafana -->|Workload Identity| BQ
+    Grafana -->|Workload Identity| CM
+    AR -.->|image pull| Primary
+    AR -.->|image pull| Secondary
+```
+
+Solid arrows are the customer request path; dotted arrows are the observability
+side-channel (logs/metrics flowing out, independent of request traffic). See §4 for
+the detailed request-by-request walkthrough, §5 for how the observability arrows above
+become the 4 Grafana panels.
+
 ## 1. Project Structure & Governance
 
 A single GCP project (`var.project_id`) hosts everything for this exercise. Project creation itself is done by Terraform (`terraform/modules/project`, `google_project` resource, `var.create_project = true` by default), including billing-account linkage via `var.billing_account` — this satisfies the spec's "Infrastructure as Code: Terraform to reproduce the entire setup" deliverable for the project bootstrap too, not just everything inside it. The textbook `Folder → Project` hierarchy is created when `var.org_id`/`var.folder_id` are set; left null, Terraform creates a standalone org-less project instead. Note that "personal account" doesn't always mean "no Organization": some personal Gmail accounts have a lightweight Cloud Identity org auto-provisioned by Google even without anyone setting one up deliberately — always check with `gcloud organizations list` before assuming it'll be empty. If it returns a row, setting `org_id` to it (leaving `folder_id` null) creates the project directly under that Org, which satisfies the spec's resource-hierarchy ask without the extra work of also provisioning a Folder. A resource `precondition` fails fast with a clear message if `billing_account` is missing while `create_project = true`, instead of surfacing a raw GCP API error. `create_project = false` remains available for the case where the project already exists and you only want Terraform to configure it (enable APIs, bind IAM) — see `docs/IMPLEMENTATION.md` Step 1.
@@ -68,6 +113,28 @@ Two **VPC-native, private** GKE Standard clusters (Autopilot was considered — 
 
 **Role split**: `gke-primary` doubles as the **MCI config cluster** (the cluster that holds the `MultiClusterIngress`/`MultiClusterService` resources — see §3) and as the Grafana host. `gke-secondary` is a peer workload cluster; nothing about it is "lesser," the config-cluster designation is just where the multi-cluster routing objects live.
 
+```mermaid
+graph LR
+    subgraph P["gke-primary — us-central1<br/>(regional control plane, 3 zones;<br/>MCI config cluster + Grafana host)"]
+        direction TB
+        WP1["web-pool<br/>e2-standard-2, 1-3 nodes<br/>pinned to us-central1-a"]
+        SP1["system-pool<br/>e2-small, 1-2 nodes<br/>tainted, pinned to us-central1-a"]
+    end
+    subgraph S["gke-secondary — us-east1<br/>(regional control plane, 3 zones;<br/>peer workload cluster)"]
+        direction TB
+        WP2["web-pool<br/>e2-standard-2, 1-3 nodes<br/>pinned to us-east1-b"]
+        SP2["system-pool<br/>e2-small, 1-2 nodes<br/>tainted, pinned to us-east1-b"]
+    end
+    Fleet["GKE Fleet<br/>both clusters registered as members"]
+    P --- Fleet
+    S --- Fleet
+```
+
+`system-pool`'s taint means it only ever scales up if something actually needs to
+tolerate it (none of this exercise's workloads do) — seeing it sit at 0 nodes in
+`kubectl get nodes` is expected, not a bug (see `docs/TROUBLESHOOTING.md` if this comes
+up live).
+
 ## 3. Application Deployment Design
 
 Both apps are deployed identically into the `apps` namespace on **both** clusters.
@@ -84,8 +151,38 @@ Both apps are deployed identically into the `apps` namespace on **both** cluster
 - `Deployment` with `replicas: 2`, `HorizontalPodAutoscaler` 2–6 pods on CPU.
 - The Cloud SQL instance itself is **not** replicated across regions for this exercise (a single instance in `us-central1` with private IP, reachable from both clusters over the VPC) — true cross-region Cloud SQL HA (read replica in `us-east1`) is listed as a DR follow-up in §6 rather than built, to keep cost/time bounded; the proxy/Workload Identity/Secret Manager wiring is identical either way.
 
+`orders-service`'s Workload Identity + Secret Manager wiring, end to end (this is the
+same pattern `catalog-service` uses minus the Cloud SQL pieces, since it needs no GCP
+permissions beyond the default node SA roles in §7):
+
+```mermaid
+graph TB
+    Deploy["Deployment: orders-service<br/>2 replicas, HPA 2-6"]
+    Pod["Pod<br/>(x2): orders-service container<br/>+ cloud-sql-proxy sidecar"]
+    Svc["Service: orders-service<br/>(ClusterIP)"]
+    KSA["KSA: orders-service-sa<br/>(Kubernetes ServiceAccount)"]
+    GSA["GSA: orders-service-sa@project.iam<br/>(Google Service Account)"]
+    SM[("Secret Manager<br/>orders-db-password")]
+    SQL[("Cloud SQL<br/>orders-db, private IP")]
+
+    Deploy --> Pod
+    Svc --> Pod
+    Pod -->|"runs as"| KSA
+    KSA -.->|"Workload Identity binding<br/>(roles/iam.workloadIdentityUser)"| GSA
+    GSA -->|"roles/cloudsql.client"| SQL
+    Pod -->|"cloud-sql-proxy, private IP,<br/>authenticated via GSA token"| SQL
+    GSA -.->|"roles/secretmanager.secretAccessor<br/>(read at deploy time, not by the pod itself)"| SM
+```
+
+The DB password itself flows Secret Manager → `scripts/sync-orders-db-secret.sh` → a
+plain Kubernetes `Secret` the pod mounts as env vars — the *pod* never calls Secret
+Manager directly; only the one-time sync script does, using its own `gcloud`
+credentials, not Workload Identity. The Workload Identity binding above is what lets
+the `cloud-sql-proxy` sidecar authenticate the actual database *connection* without any
+credential file.
+
 ### Ingress & Traffic Distribution
-- **Global External HTTPS Load Balancer** fed by **Multi-Cluster Ingress (MCI)**, fronting both clusters under one anycast IP and one managed SSL cert.
+- **Global External Load Balancer** fed by **Multi-Cluster Ingress (MCI)**, fronting both clusters under one anycast IP. Running **HTTP-only, not HTTPS, for this exercise** — a Google-managed SSL cert requires a real domain to issue against, and this demo never had one (see the deviation log in §9). The LB, MCI, NEGs, health checks, and failover all work identically either way; only the listener protocol/port differs (80, not 443). Don't test the live endpoint by typing the bare IP into a browser address bar — most browsers auto-upgrade that to `https://` by default and will fail with a connection error since nothing listens on 443. Always use the explicit `http://` scheme.
 - MCI requires both clusters registered to the project's GKE **Fleet** (`gcloud container fleet memberships register` / `google_gke_hub_membership`), with the Multi-cluster Ingress feature enabled and `gke-primary` set as the config cluster. This is a Fleet/GKE feature, not a full Anthos Service Mesh license — no extra licensing cost beyond standard GKE.
 - `MultiClusterService` objects fan out to the `catalog-service`/`orders-service` Kubernetes `Service` in each member cluster; `MultiClusterIngress` defines the single global routing rule (path-based: `/api/catalog*` → catalog-service, `/api/orders*` → orders-service).
 - Health checks on the backend NEGs drive automatic failover: if all pods in one cluster fail readiness, the LB stops sending traffic there without any manual DNS or config change.
@@ -97,13 +194,13 @@ Both apps are deployed identically into the `apps` namespace on **both** cluster
 
 ```
 Customer
-  │  HTTPS to https://<demo-domain or LB IP>
+  │  HTTP to http://<LB IP>  (HTTPS not built — no domain for a managed cert,
+  │  see §9; use the explicit http:// scheme, don't rely on browser auto-upgrade)
   ▼
-Cloud DNS  ───────────────►  A record → Global LB anycast IP
-  │
+Cloud DNS  ───────────────►  A record → Global LB anycast IP (optional, only if
+  │                          you point a real domain at it — not required to demo)
   ▼
-Global External HTTPS Load Balancer
-  │  - SSL termination (Google-managed cert)
+Global External Load Balancer
   │  - URI routing: /api/catalog* , /api/orders*
   │  - Cloud Armor inspection (rate-limit + OWASP CRS preview rules)
   ▼
@@ -142,12 +239,39 @@ Read literally, all four panels query BigQuery. In practice, two of those four (
 
 | # | Panel | Data source | Query |
 |---|---|---|---|
-| 1 | Application error rate over time | **BigQuery** (`logs_export`) | `bigquery/sample_queries.sql` §1 — `COUNTIF(severity='ERROR')/COUNT(*)` per app per hour |
+| 1 | Application error rate over time | **BigQuery** (`logs_export`) | `bigquery/sample_queries.sql` §1 — `COUNTIF(jsonPayload.level IN ('ERROR','WARN'))/COUNT(*)` per app per hour. Queries `jsonPayload.level`, not the top-level `severity` column — Cloud Logging only auto-promotes a JSON field literally named `severity`, and the apps' logback config doesn't actually produce one despite intending to; see `docs/TROUBLESHOOTING.md` #9. |
 | 2 | Pod restart counts by namespace | Cloud Monitoring (`kubernetes.io/container/restart_count`) — cross-checked against `sink-k8s-events` in BigQuery, see `bigquery/sample_queries.sql` §2 | Grafana Cloud Monitoring panel |
 | 3 | Request latency percentiles (p50/p95/p99) | Cloud Monitoring (`loadbalancing.googleapis.com/https/total_latencies`) | Grafana Cloud Monitoring panel |
 | 4 | Resource utilization trends (CPU/Memory) | Cloud Monitoring (`kubernetes.io/container/cpu/core_usage_time`, `.../memory/used_bytes`) | Grafana Cloud Monitoring panel |
 
 If a reviewer wants all four strictly from BigQuery, `bigquery/sample_queries.sql` includes equivalent BQ-only versions of panels 2–4 derived from the log sinks (restart counts from `sink-k8s-events`, latency from LB request logs, CPU/memory approximated from container log volume as a fallback) — slower to query and noisier, but present so the literal requirement is satisfiable too. Grafana is deployed via Helm into `gke-primary`/`monitoring`, with both the `grafana-bigquery-datasource` and the native Google Cloud Monitoring data source plugins provisioned (see `grafana/provisioning/datasources/`).
+
+```mermaid
+graph LR
+    Apps["catalog-service /<br/>orders-service pods"]
+    Nodes["GKE nodes +<br/>control plane"]
+    CL["Cloud Logging"]
+    CM["Cloud Monitoring"]
+    Sink1["sink-app-logs"]
+    Sink2["sink-k8s-events"]
+    BQ[("BigQuery: logs_export<br/>tables: stdout, stderr, events")]
+    Grafana["Grafana<br/>(Workload Identity:<br/>bigquery.dataViewer + jobUser,<br/>monitoring.viewer)"]
+
+    Apps -->|structured JSON stdout| CL
+    Apps -->|CPU/memory/restart metrics| CM
+    Nodes -->|node + control-plane metrics| CM
+    CL --> Sink1
+    CL --> Sink2
+    Sink1 --> BQ
+    Sink2 --> BQ
+    BQ -->|"panel 1: error rate"| Grafana
+    CM -->|"panels 2-4: restarts,<br/>latency, CPU/memory"| Grafana
+```
+
+Two Workload Identity roles drive the BigQuery side specifically:
+`roles/bigquery.dataViewer` (read the dataset) *and* `roles/bigquery.jobUser` (actually
+run a query job) — granting only one is a real, easy-to-hit failure mode, see
+`docs/TROUBLESHOOTING.md` #4.
 
 ### Cloud Trace / Cloud Profiler / Error Reporting
 - **Error Reporting** works out of the box with zero extra integration: uncaught exceptions surface automatically once structured logs include a stack trace in the standard format, which the logging setup in `apps/*/README.md` already produces.
@@ -183,7 +307,8 @@ If a reviewer wants all four strictly from BigQuery, `bigquery/sample_queries.sq
 ## 9. Decision log (Autopilot vs Standard, and other calls made)
 
 - **GKE Standard, not Autopilot**: Autopilot removes node-pool-level control (no separate `system-pool`, no manual HPA-on-CPU-without-resource-requests workarounds) and the spec explicitly lists node pools and "Standard or Autopilot depending on operational model" — Standard was chosen because the spec's node-pool segmentation (general-purpose vs system) is more naturally a Standard-cluster concept and it's cheaper to right-size at this small scale.
-- **Zonal over regional clusters**: cost, see §2.
+- **Regional clusters, node pools pinned to one zone**: see §2 — a 3-zone control plane for real HA, without paying for 3x node compute. (Earlier drafts of this doc said "zonal over regional, for cost" — superseded once the actual marginal cost was worked out to be trivial; node-pool zone-pinning gets the cost savings without giving up control-plane HA.)
 - **Cloud SQL over Pub/Sub/Memorystore for App B**: best demonstrates Workload Identity + Secret Manager, which the spec separately requires under Security.
 - **Self-hosted Grafana via Helm, not Grafana Cloud SaaS**: keeps everything inside the one GCP project/VPC with no third-party account signup, and is what "Cloud-hosted Grafana" most naturally means when read alongside "use GCP native capabilities" elsewhere in the spec — it runs *on* GCP compute, even though it isn't a literal first-party "Google Cloud Managed Grafana" product (GCP doesn't currently offer one the way AWS does).
 - **Binary Authorization in dry-run, Cloud Armor in preview-then-enforce**: both are real, configured, and visible in the console for the demo, without risk of blocking the Tuesday/Wednesday walkthrough if something is mis-tuned.
+- **HTTP-only load balancer, no HTTPS**: the spec calls for a "Global External HTTPS Load Balancer," but a Google-managed SSL cert requires a real domain to issue against, and this demo never registered one. Building a self-signed cert for a bare IP was considered and rejected — it would replace a clean connection failure with a scary "connection not private" browser warning that's *more* confusing to a reviewer unfamiliar with the setup, for no real security benefit in a torn-down-after-the-demo exercise. Everything else in the spec's ingress requirement (MCI, NEGs, health-check-driven failover, URI routing, Cloud Armor) is built and real; only the TLS termination layer is skipped. If this became a real production rollout, the fix is a one-line addition: point a real domain at the LB IP and let GKE Ingress provision the Google-managed cert automatically.
