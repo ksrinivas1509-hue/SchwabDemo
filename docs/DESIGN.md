@@ -155,25 +155,6 @@ Both apps are deployed identically into the `apps` namespace on **both** cluster
 same pattern `catalog-service` uses minus the Cloud SQL pieces, since it needs no GCP
 permissions beyond the default node SA roles in §7):
 
-```mermaid
-graph TB
-    Deploy["Deployment: orders-service<br/>2 replicas, HPA 2-6"]
-    Pod["Pod<br/>(x2): orders-service container<br/>+ cloud-sql-proxy sidecar"]
-    Svc["Service: orders-service<br/>(ClusterIP)"]
-    KSA["KSA: orders-service-sa<br/>(Kubernetes ServiceAccount)"]
-    GSA["GSA: orders-service-sa@project.iam<br/>(Google Service Account)"]
-    SM[("Secret Manager<br/>orders-db-password")]
-    SQL[("Cloud SQL<br/>orders-db, private IP")]
-
-    Deploy --> Pod
-    Svc --> Pod
-    Pod -->|"runs as"| KSA
-    KSA -.->|"Workload Identity binding<br/>(roles/iam.workloadIdentityUser)"| GSA
-    GSA -->|"roles/cloudsql.client"| SQL
-    Pod -->|"cloud-sql-proxy, private IP,<br/>authenticated via GSA token"| SQL
-    GSA -.->|"roles/secretmanager.secretAccessor<br/>(read at deploy time, not by the pod itself)"| SM
-```
-
 The DB password itself flows Secret Manager → `scripts/sync-orders-db-secret.sh` → a
 plain Kubernetes `Secret` the pod mounts as env vars — the *pod* never calls Secret
 Manager directly; only the one-time sync script does, using its own `gcloud`
