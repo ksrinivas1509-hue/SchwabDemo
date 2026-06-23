@@ -1,6 +1,6 @@
 # Design Doc: GCP Project with Two GKE Clusters, Two Web Apps, Multi-Pod Deployment & Full Observability
 
-Status: Draft for Monday demo. Source requirements: `../instructions`.
+Source requirements: `../instructions`.
 
 ## 0. Naming & convention reference
 
@@ -256,12 +256,12 @@ run a query job) — granting only one is a real, easy-to-hit failure mode, see
 
 ### Cloud Trace / Cloud Profiler / Error Reporting
 - **Error Reporting** works out of the box with zero extra integration: uncaught exceptions surface automatically once structured logs include a stack trace in the standard format, which the logging setup in `apps/*/README.md` already produces.
-- **Cloud Trace** and **Cloud Profiler** are intentionally *not* wired into the base apps in this pass — both need an extra Maven dependency (`spring-cloud-gcp-starter-trace`) or a Java agent added to the Dockerfile, and verifying either against a real build/cluster was judged not worth the risk this close to the Monday deadline versus the four actual deliverables (working endpoint, Grafana dashboard, BigQuery queries, troubleshooting writeup). `docs/IMPLEMENTATION.md` step 9 has the exact one-dependency / one-env-var changes to bolt them on if time remains after the core deliverables are demo-ready.
+- **Cloud Trace** and **Cloud Profiler** are intentionally *not* wired into the base apps in this pass — both need an extra Maven dependency (`spring-cloud-gcp-starter-trace`) or a Java agent added to the Dockerfile, and verifying either against a real build/cluster was judged not worth the risk this close to the deadline versus the four actual deliverables (working endpoint, Grafana dashboard, BigQuery queries, troubleshooting writeup). `docs/IMPLEMENTATION.md` step 9 has the exact one-dependency / one-env-var changes to bolt them on if time remains after the core deliverables are demo-ready.
 
 ## 6. High Availability & Disaster Recovery
 
 - Two GKE clusters in two regions + MCI health-check-driven failover = the cross-regional redundancy layer.
-- **State**: only `orders-service` has state (Cloud SQL). For this exercise the instance is single-region (§3); the documented production follow-up is a cross-region **read replica** in `us-east1` promotable on failover, or moving to Cloud SQL HA (regional) configuration — both are one Terraform variable away (`var.cloudsql_availability_type = "REGIONAL"` and an extra `google_sql_database_instance` replica resource), intentionally not turned on here to control cost/time given the Monday deadline.
+- **State**: only `orders-service` has state (Cloud SQL). For this exercise the instance is single-region (§3); the documented production follow-up is a cross-region **read replica** in `us-east1` promotable on failover, or moving to Cloud SQL HA (regional) configuration — both are one Terraform variable away (`var.cloudsql_availability_type = "REGIONAL"` and an extra `google_sql_database_instance` replica resource), intentionally not turned on here to control cost/time given the deadline.
 - **Backups**: Cloud SQL automated daily backups + point-in-time recovery are enabled (`backup_configuration` block, 7-day retention). GKE itself has no etcd to back up directly (Google manages the control plane for Standard clusters) — workload state lives in Git (these manifests), which **is** the backup/restore mechanism for cluster config. Artifact Registry has no built-in backup policy in this exercise; images are reproducible from source, so the Git repo is the source of truth.
 
 ## 7. Security
